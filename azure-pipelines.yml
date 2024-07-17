@@ -1,0 +1,124 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+resources:
+  repositories:
+  - repository: launcher-automation
+    type: github
+    name: docusign/launcher-automation
+    ref: main
+    endpoint: launcherAutomationServiceConnection
+
+pr:
+- master
+- releases/*
+
+pool:
+  name: launcher-automation-pool
+
+steps:
+- script: echo Hello, world!
+  displayName: 'Run a one-line script'
+- checkout: self
+- checkout: launcher-automation
+
+- script: dir $(Build.SourcesDirectory)
+
+- task: DownloadSecureFile@1
+  name: node_dockerfile
+  displayName: 'download Dockerfile'
+  inputs:
+    secureFile: 'node.Dockerfile'
+
+- script: |
+    echo "place node.Dockerfile"
+    echo $(node_dockerfile.secureFilePath)
+    cp $(node_Dockerfile.secureFilePath) code-examples-node-private/Dockerfile
+  displayName: 'place Dockerfile'
+
+- task: DownloadSecureFile@1
+  name: tests_config_properties
+  displayName: 'download config.properties'
+  inputs:
+    secureFile: 'tests_config.properties'
+
+
+- script: |
+    echo "place config.properties"
+    echo $(tests_config_properties.secureFilePath)
+    cp $(tests_config_properties.secureFilePath) launcher-automation/src/main/resources/config.properties
+  displayName: 'place config.properties'
+
+- task: DownloadSecureFile@1
+  name: node_appsettings
+  displayName: 'download appsettings.json'
+  inputs:
+    secureFile: 'node.appsettings.json'
+
+
+- script: |
+    echo "place appsettings.json"
+    cp $(node_appsettings.secureFilePath) code-examples-node-private/config/appsettings.json
+  displayName: 'place appsettings.json'
+
+
+- task: DownloadSecureFile@1
+  name: node_private_key
+  displayName: 'download private.key'
+  inputs:
+    secureFile: 'private.key'
+
+
+- script: |
+    echo "place private.key"
+    cp $(node_private_key.secureFilePath) code-examples-node-private/config/private.key
+  displayName: 'place private.key'
+
+- script: |
+    echo "Checking for running Docker containers..."
+    containers=$(docker ps -q)
+    if [ ! -z "$containers" ]; then
+      echo "Stopping running Docker containers..."
+      docker stop $(docker ps -q)
+    else
+      echo "No Docker containers are running."
+    fi
+  displayName: "check for running containers"
+
+- script: |
+    docker system prune -a --force
+  displayName: "cleanup docker files"
+
+- task: Docker@2
+  displayName: Build node image
+  inputs:
+    command: build
+    repository: 'launcher-automation-node'
+    dockerfile: '$(Build.SourcesDirectory)/code-examples-node-private/Dockerfile'
+    buildContext: '$(Build.SourcesDirectory)/code-examples-node-private '
+    tags: |
+      latest
+
+- script: |
+    docker run -p 3000:3000 -d launcher-automation-node:latest
+  displayName: 'start node app'
+
+- script: |
+    cd launcher-automation
+    mvn clean test -DsuiteXmlFile="node_suite.xml"
+  displayName: 'Node app tests'
+
+- script: |
+    docker stop $(docker ps -a -q)
+    docker rm $(docker ps -a -q)
+  displayName: 'stop node app'
+
+- script: |
+    allure generate --clean --output $(Build.SourcesDirectory)/node-allure-output '$(Build.SourcesDirectory)/launcher-automation/target/allure-results'
+  displayName: generate allure html reports
+
+- task: PublishAllureReport@1
+  displayName: 'Publish Allure Report'
+  inputs:
+    reportDir: '$(Build.SourcesDirectory)/node-allure-output'
